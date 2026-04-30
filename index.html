@@ -254,9 +254,9 @@ footer{border-top:1px solid var(--border);padding:14px 32px;display:flex;align-i
         <button class="ro" id="rMgr" onclick="setRole('manager')"><span class="ri">📊</span>Project Lead</button>
       </div>
     </div>
-    <div class="fg"><label>Select User</label>
+    <div class="fg"><label>Your Name</label>
       <select class="fi" id="lName" style="margin-bottom:0;">
-        <option value="">— Select Select User —</option>
+        <option value="">— Select User —</option>
       </select>
     </div>
     <div class="fg" style="margin-top:12px;"><label>Secure Access PIN</label><input type="password" class="fi" id="lPin" placeholder="••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
@@ -277,6 +277,7 @@ footer{border-top:1px solid var(--border);padding:14px 32px;display:flex;align-i
     </div>
     <div class="hr">
       <div class="upill"><div class="udot"></div><div><div class="uname" id="hName">—</div><div class="urole" id="hRole">—</div></div></div>
+      <span id="syncStatus" style="font-size:10px;font-family:var(--mono);color:var(--muted2);padding:0 2px;min-width:60px;text-align:center;"></span>
       <button class="hb hbh" id="hLog" onclick="openMod('updateModal')">📋 Log Update</button>
       <button class="hb hbh" id="hStaff" onclick="openMod('staffModal')">👥 Staff</button>
       <button class="hb hbg" id="hProj" onclick="openMod('projectModal')">+ Project</button>
@@ -512,13 +513,77 @@ const pc=i=>PAL[i%PAL.length];
 const ini=n=>n.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
 
 // ── STATE ──
-let CU=null, refreshTimer=null;
+let CU=null, refreshTimer=null, pollTimer=null;
 
-// ── DATA (localStorage) ──
-const KEY='drc3_far';
-const db=()=>JSON.parse(localStorage.getItem(KEY)||'{"projects":[],"staff":[],"activity":[]}');
-const sv=d=>localStorage.setItem(KEY,JSON.stringify(d));
-const n=v=>parseInt(v)||0;
+// ══════════════════════════════════════════
+// JSONBIN CLOUD SYNC
+// ══════════════════════════════════════════
+const BIN_ID   = '69f2fc37856a6821898cc701';
+const MKEY     = '$2a$10$xNYNisdxujIDuYBaIG9Hh.criKQvJWjWdQgZi59AeWxWoNxxr8u9y';
+const BIN_URL  = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+const HEADERS  = { 'Content-Type':'application/json', 'X-Master-Key': MKEY, 'X-Bin-Versioning':'false' };
+
+// Local cache so UI is snappy
+let _cache = null;
+
+function showSyncStatus(msg, color='var(--muted2)'){
+  const el = document.getElementById('syncStatus');
+  if(el){ el.textContent = msg; el.style.color = color; }
+}
+
+async function dbLoad(){
+  try {
+    showSyncStatus('⟳ Syncing…');
+    const r = await fetch(BIN_URL+'/latest', { headers: { 'X-Master-Key': MKEY } });
+    if(!r.ok) throw new Error('Load failed');
+    const j = await r.json();
+    _cache = j.record || {projects:[],staff:[],activity:[]};
+    // Ensure arrays exist
+    if(!_cache.projects) _cache.projects=[];
+    if(!_cache.staff)    _cache.staff=[];
+    if(!_cache.activity) _cache.activity=[];
+    showSyncStatus('✓ Live', 'var(--green)');
+    return _cache;
+  } catch(e){
+    showSyncStatus('⚠ Offline', 'var(--amber)');
+    // Fall back to local cache
+    if(_cache) return _cache;
+    return {projects:[],staff:[],activity:[]};
+  }
+}
+
+async function dbSave(d){
+  _cache = d;
+  showSyncStatus('⟳ Saving…');
+  try {
+    const r = await fetch(BIN_URL, {
+      method: 'PUT',
+      headers: HEADERS,
+      body: JSON.stringify(d)
+    });
+    if(!r.ok) throw new Error('Save failed');
+    showSyncStatus('✓ Saved', 'var(--green)');
+    setTimeout(()=>showSyncStatus('✓ Live','var(--green)'),2000);
+  } catch(e){
+    showSyncStatus('⚠ Save failed', 'var(--red)');
+    toast('⚠ Save failed — check internet connection');
+  }
+}
+
+// Synchronous db() returns cache for immediate renders
+const db  = () => _cache || {projects:[],staff:[],activity:[]};
+// sv() saves to cloud
+const sv  = async (d) => { _cache=d; await dbSave(d); };
+const n   = v => parseInt(v)||0;
+
+// Poll for changes every 30s so all users see live updates
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    await dbLoad();
+    renderAll();
+  }, 30000);
+}
 
 // ── LOGIN ──
 let selRole='staff';
@@ -531,7 +596,7 @@ function setRole(r){
 function populateLoginNames(){
   const d=db();
   const sel=document.getElementById('lName');
-  sel.innerHTML='<option value="">— Select Select User —</option>';
+  sel.innerHTML='<option value="">— Select User —</option>';
   if(selRole==='manager'){
     MANAGERS.forEach(m=>{ const o=document.createElement('option'); o.value=m.name; o.textContent=m.name; sel.appendChild(o); });
   } else {
@@ -542,23 +607,43 @@ function doLogin(){
   const name=document.getElementById('lName').value.trim();
   const pin=document.getElementById('lPin').value.trim();
   const err=document.getElementById('lErr');
-  if(!name){ err.style.display='block'; err.textContent='Please select Select User.'; return; }
+  if(!name){ err.style.display='block'; err.textContent='Please select User.'; return; }
   const expPin=selRole==='staff'?STAFF_PIN:MGR_PIN;
   if(pin!==expPin){ err.style.display='block'; err.textContent='Incorrect PIN. Please try again.'; return; }
   err.style.display='none';
   CU={name,role:selRole};
-  document.getElementById('loginScreen').style.display='none';
-  document.getElementById('app').style.display='block';
-  applyRole(); renderAll();
-  if(refreshTimer) clearInterval(refreshTimer);
-  refreshTimer=setInterval(renderAll,60000);
+  const lbtn=document.querySelector('.lbtn');
+  lbtn.textContent='Loading…'; lbtn.disabled=true;
+  // If cache already loaded (from init), use it directly; else load from cloud
+  const proceed = () => {
+    document.getElementById('loginScreen').style.display='none';
+    document.getElementById('app').style.display='block';
+    applyRole();
+    seedIfEmpty();
+    renderAll();
+    startPolling();
+    if(refreshTimer) clearInterval(refreshTimer);
+    refreshTimer=setInterval(()=>{ setDates(); },60000);
+  };
+  if(_cache){
+    proceed();
+  } else {
+    dbLoad().then(proceed).catch(()=>{
+      lbtn.textContent='Sign In →'; lbtn.disabled=false;
+      err.style.display='block'; err.textContent='Could not connect. Check internet.';
+    });
+  }
 }
 function doLogout(){
   CU=null;
   if(refreshTimer) clearInterval(refreshTimer);
+  if(pollTimer) clearInterval(pollTimer);
+  _cache=null;
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('app').style.display='none';
   document.getElementById('lPin').value='';
+  const lbtn=document.querySelector('.lbtn');
+  if(lbtn){ lbtn.textContent='Sign In →'; lbtn.disabled=false; }
   populateLoginNames();
 }
 function applyRole(){
@@ -1006,7 +1091,7 @@ function editProj(id){
   fillAssignee('fAss',p.assignee||'');
   document.getElementById('projectModal').classList.add('open');
 }
-function saveProject(){
+async function saveProject(){
   const name=document.getElementById('fN').value.trim();
   const far=n(document.getElementById('fFar').value);
   const phy=n(document.getElementById('fPhy').value);
@@ -1024,11 +1109,11 @@ function saveProject(){
   } else {
     d.projects.push({id:'p'+Date.now(),name,far,phy,mapped,client,deadline,assignee,deliveryStatus,remarks,updated:new Date().toISOString()});
   }
-  sv(d); closeMod('projectModal'); renderAll(); toast('Project saved successfully');
+  await sv(d); closeMod('projectModal'); renderAll(); toast('Project saved successfully');
 }
-function delProj(id){
+async function delProj(id){
   if(!confirm('Delete this project? This cannot be undone.')) return;
-  const d=db(); d.projects=d.projects.filter(p=>p.id!==id); sv(d); renderAll(); toast('Project deleted');
+  const d=db(); d.projects=d.projects.filter(p=>p.id!==id); await sv(d); renderAll(); toast('Project deleted');
 }
 
 // ── UPDATE LOG ──
@@ -1062,7 +1147,7 @@ function onProjChange(){
     document.getElementById('cPct').style.color=pColor(pct);
   } else { box.style.display='none'; }
 }
-function saveUpdate(){
+async function saveUpdate(){
   const sId=document.getElementById('uStaff').value;
   const pId=document.getElementById('uProj').value;
   const mapped=parseInt(document.getElementById('uMap').value);
@@ -1072,7 +1157,7 @@ function saveUpdate(){
   const prev=n(p.mapped),delta=mapped-prev;
   p.mapped=mapped; p.updated=new Date().toISOString();
   d.activity.push({id:'a'+Date.now(),staffId:sId,projectId:pId,mapped,delta,notes,ts:new Date().toISOString()});
-  sv(d); closeMod('updateModal'); renderAll();
+  await sv(d); closeMod('updateModal'); renderAll();
   toast(`Update saved · ${delta>=0?'+':''}${delta} assets mapped`);
 }
 
@@ -1092,16 +1177,16 @@ function renderStaffList(){
     </div>`;
   }).join('');
 }
-function addStaff(){
+async function addStaff(){
   const name=document.getElementById('sName').value.trim(); if(!name) return;
   const d=db(); if(!d.staff) d.staff=[];
   if(d.staff.find(s=>s.name.toLowerCase()===name.toLowerCase())){ alert('Already exists'); return; }
-  d.staff.push({id:'s'+Date.now(),name}); sv(d);
+  d.staff.push({id:'s'+Date.now(),name}); await sv(d);
   document.getElementById('sName').value='';
   renderStaffList(); populateLoginNames(); toast(name+' added to team');
 }
-function rmStaff(id){
-  const d=db(); d.staff=d.staff.filter(s=>s.id!==id); sv(d); renderStaffList(); populateLoginNames();
+async function rmStaff(id){
+  const d=db(); d.staff=d.staff.filter(s=>s.id!==id); await sv(d); renderStaffList(); populateLoginNames();
 }
 
 // ── TOAST ──
@@ -1113,70 +1198,52 @@ function toast(msg){
 }
 
 // ══════════════════════════════════════════
-// SEED DATA — pre-load all projects
-// Uses a separate check key so re-seeding
-// doesn't wipe user-entered activity/edits
+// SEED DATA — only runs if cloud bin is empty
 // ══════════════════════════════════════════
-(function seedData(){
-  const SEED_KEY='drc3_seeded_v3';
-  if(localStorage.getItem(SEED_KEY)) return; // already seeded, never re-run
+async function seedIfEmpty(){
+  const d = db();
+  // If projects already exist in cloud, don't overwrite
+  if(d.projects && d.projects.length > 0) {
+    populateLoginNames();
+    return;
+  }
 
-  const d=db();
+  const seeded = {
+    staff:[
+      {id:'s1',name:'Jaystutty'},
+      {id:'s2',name:'Sowmya'},
+    ],
+    projects:[
+      {id:'p1',name:'The Artiste Hotel – Prestige Group',client:'Bengaluru',far:3551,phy:2622,mapped:2228,assignee:'s1',deadline:'2026-05-31',deliveryStatus:'active',remarks:'',updated:new Date().toISOString()},
+      {id:'p2',name:'Conrad Bengaluru',client:'Bengaluru',far:15000,phy:6900,mapped:0,assignee:'s1',deadline:'',deliveryStatus:'active',remarks:'Physical survey ongoing',updated:new Date().toISOString()},
+      {id:'p3',name:'Sheraton Grand Bengaluru Whitefield Hotel',client:'Bengaluru',far:17000,phy:16120,mapped:4500,assignee:'s2',deadline:'',deliveryStatus:'active',remarks:'',updated:new Date().toISOString()},
+      {id:'p4',name:'JW Marriott Bengaluru Prestige Golfshire Resort & Spa',client:'Bengaluru',far:12000,phy:3000,mapped:0,assignee:'s1',deadline:'',deliveryStatus:'active',remarks:'Survey in early stages',updated:new Date().toISOString()},
+      {id:'p5',name:'Angsana Oasis Spa And Resort',client:'Bengaluru',far:10000,phy:9000,mapped:8920,assignee:'s2',deadline:'2026-04-30',deliveryStatus:'delivered',remarks:'Delivered — minor gap acceptable',updated:new Date().toISOString()},
+      {id:'p6',name:'Royal Orchid Resort & Convention Centre',client:'Bengaluru',far:5000,phy:0,mapped:0,assignee:'',deadline:'',deliveryStatus:'yet_to_start',remarks:'Awaiting site access',updated:new Date().toISOString()},
+    ],
+    activity:[]
+  };
 
-  // Staff
-  d.staff=[
-    {id:'s1',name:'Jaystutty'},
-    {id:'s2',name:'Sowmya'},
-  ];
-
-  // Projects
-  d.projects=[
-    {
-      id:'p1',name:'The Artiste Hotel – Prestige Group',client:'Bengaluru',
-      far:3551,phy:2622,mapped:2228,
-      assignee:'s1',deadline:'2026-05-31',
-      deliveryStatus:'active',remarks:'',updated:new Date().toISOString()
-    },
-    {
-      id:'p2',name:'Conrad Bengaluru',client:'Bengaluru',
-      far:15000,phy:6900,mapped:0,
-      assignee:'s1',deadline:'',
-      deliveryStatus:'active',remarks:'Physical survey ongoing',updated:new Date().toISOString()
-    },
-    {
-      id:'p3',name:'Sheraton Grand Bengaluru Whitefield Hotel',client:'Bengaluru',
-      far:17000,phy:16120,mapped:4500,
-      assignee:'s2',deadline:'',
-      deliveryStatus:'active',remarks:'',updated:new Date().toISOString()
-    },
-    {
-      id:'p4',name:'JW Marriott Bengaluru Prestige Golfshire Resort & Spa',client:'Bengaluru',
-      far:12000,phy:3000,mapped:0,
-      assignee:'s1',deadline:'',
-      deliveryStatus:'active',remarks:'Survey in early stages',updated:new Date().toISOString()
-    },
-    {
-      id:'p5',name:'Angsana Oasis Spa And Resort',client:'Bengaluru',
-      far:10000,phy:9000,mapped:8920,
-      assignee:'s2',deadline:'2026-04-30',
-      deliveryStatus:'delivered',remarks:'Delivered — minor gap acceptable',updated:new Date().toISOString()
-    },
-    {
-      id:'p6',name:'Royal Orchid Resort & Convention Centre',client:'Bengaluru',
-      far:5000,phy:0,mapped:0,
-      assignee:'',deadline:'',
-      deliveryStatus:'yet_to_start',remarks:'Awaiting site access',updated:new Date().toISOString()
-    },
-  ];
-
-  d.activity=[];
-  sv(d);
-  localStorage.setItem(SEED_KEY,'1');
-})();
+  await sv(seeded);
+  _cache = seeded;
+  populateLoginNames();
+  renderAll();
+}
 
 // ── INIT ──
-populateLoginNames();
-setInterval(setDates,60000);
+// Load cloud data first so staff names appear in login dropdown
+setInterval(setDates, 60000);
+(async function init(){
+  try {
+    // Show loading state in dropdown
+    const sel = document.getElementById('lName');
+    if(sel){ sel.innerHTML='<option value="">⟳ Loading users…</option>'; }
+    await dbLoad();
+    populateLoginNames();
+  } catch(e){
+    populateLoginNames(); // fallback
+  }
+})();
 </script>
 </body>
 </html>
