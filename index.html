@@ -852,8 +852,6 @@ function doLogin(){
   if(_cache){ proceed(); }
   else { dbLoad().then(proceed).catch(()=>{ lbtn.textContent='Sign In →'; lbtn.disabled=false; err.style.display='block'; err.textContent='Could not connect. Check internet.'; }); }
 }
-  const lbtn=document.querySelector('.lbtn');
-  lbtn.textContent='Loading…'; lbtn.disabled=true;
   // If cache already loaded (from init), use it directly; else load from cloud
 function doLogout(){
   CU=null;
