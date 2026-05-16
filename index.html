@@ -1333,45 +1333,18 @@ function calcForecast(p){
 }
 
 function forecastBadge(p){
-  // Delivered — no tracking needed
   if(p.deliveryStatus==='delivered')
     return `<span class="forecast-badge fb-green">✓ Delivered</span>`;
-
-  // Yet to start
   if(n(p.phy)===0)
     return `<span class="forecast-badge fb-grey">⏳ Not Started</span>`;
-
-  // Days since last update
   if(!p.updated)
     return `<span class="forecast-badge fb-grey">No updates</span>`;
-
-  const days = Math.floor((Date.now() - new Date(p.updated)) / 86400000);
-
-  if(days === 0)
-    return `<span class="forecast-badge fb-green">✓ Updated today</span>`;
-  if(days === 1)
-    return `<span class="forecast-badge fb-green">Updated yesterday</span>`;
-  if(days <= 3)
-    return `<span class="forecast-badge fb-amber">⚠ ${days} days ago</span>`;
-  if(days <= 7)
-    return `<span class="forecast-badge fb-amber">⚠ ${days} days ago</span>`;
+  const days=Math.floor((Date.now()-new Date(p.updated))/86400000);
+  if(days===0) return `<span class="forecast-badge fb-green">✓ Updated today</span>`;
+  if(days===1) return `<span class="forecast-badge fb-green">Updated yesterday</span>`;
+  if(days<=3) return `<span class="forecast-badge fb-amber">⚠ ${days} days ago</span>`;
+  if(days<=7) return `<span class="forecast-badge fb-amber">⚠ ${days} days ago</span>`;
   return `<span class="forecast-badge fb-red">🔴 ${days} days ago</span>`;
-}
-
-  // Mapping nearly done
-  const mapPct=phy?Math.round(mapped/phy*100):0;
-  if(mapPct>=95) return `<span class="forecast-badge fb-green">✓ Near Complete</span>`;
-  if(mapPct>=85) return `<span class="forecast-badge fb-green">On Track</span>`;
-
-  // Show ETA if calculable
-  if(f.mapETA) return `<span class="forecast-badge fb-green">~${f.mapETA}</span>`;
-  if(f.tagETA) return `<span class="forecast-badge fb-amber">Tag ~${f.tagETA}</span>`;
-
-  // Last resort — show % done instead of "insufficient"
-  const tagPct=far?Math.round(phy/far*100):0;
-  if(tagPct>0) return `<span class="forecast-badge fb-amber">${tagPct}% Tagged · ${mapPct}% Mapped</span>`;
-
-  return `<span class="forecast-badge fb-grey">Awaiting logs</span>`;
 }
 
 // ══════════════════════════════════════════
