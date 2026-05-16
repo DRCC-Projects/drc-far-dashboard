@@ -1280,62 +1280,93 @@ function calcForecast(p){
   const d=db();
   const logs=(d.taggingLogs||[]).filter(l=>l.projectId===p.id).sort((a,b)=>new Date(a.ts)-new Date(b.ts));
   const mapLogs=(d.activity||[]).filter(a=>a.projectId===p.id).sort((a,b)=>new Date(a.ts)-new Date(b.ts));
-
-  // Tagging velocity — last 7 days
   const now=Date.now();
   const week=7*24*60*60*1000;
+
+  // Tagging velocity — last 7 days
   const recentTag=logs.filter(l=>now-new Date(l.ts)<week);
-  const tagVelocity=recentTag.length>=2
-    ? recentTag.reduce((s,l)=>s+(l.taggedToday||0),0)/7
-    : 0;
+  let tagVelocity=recentTag.length>=2
+    ? recentTag.reduce((s,l)=>s+(l.taggedToday||0),0)/7 : 0;
 
-  // Mapping velocity — last 7 days
+  // Mapping velocity — last 7 days (fallback)
   const recentMap=mapLogs.filter(a=>now-new Date(a.ts)<week);
-  const mapVelocity=recentMap.length>=1
-    ? recentMap.reduce((s,a)=>s+(a.delta||0),0)/7
-    : 0;
+  let mapVelocity=recentMap.length>=1
+    ? recentMap.reduce((s,a)=>s+(a.delta||0),0)/7 : 0;
 
-  const phy=n(p.phy), far=n(p.far), mapped=n(p.mapped);
+  // FALLBACK: if no tagging logs, estimate from overall physical progress
+  if(tagVelocity===0 && logs.length===0 && n(p.phy)>0){
+    // estimate from first time physical was recorded vs now
+    const projAge=p.updated?(now-new Date(p.updated))/86400000:30;
+    tagVelocity=n(p.phy)/Math.max(projAge,1);
+  }
+
+  // FALLBACK: if no recent mapping logs, estimate from overall mapped progress
+  if(mapVelocity===0 && n(p.mapped)>0 && mapLogs.length>0){
+    const oldest=new Date(mapLogs[0].ts);
+    const days=Math.max((now-oldest)/86400000,1);
+    mapVelocity=n(p.mapped)/days;
+  }
+
+  const phy=n(p.phy),far=n(p.far),mapped=n(p.mapped);
   const tagRemaining=Math.max(0,far-phy);
   const mapRemaining=Math.max(0,phy-mapped);
 
-  let tagDaysLeft=null, mapDaysLeft=null;
+  let tagDaysLeft=null,mapDaysLeft=null;
   if(tagVelocity>0) tagDaysLeft=Math.ceil(tagRemaining/tagVelocity);
   if(mapVelocity>0) mapDaysLeft=Math.ceil(mapRemaining/mapVelocity);
 
   const addDays=(days)=>{
-    const d=new Date(); d.setDate(d.getDate()+days);
-    return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'});
+    const dt=new Date();
+    dt.setDate(dt.getDate()+days);
+    return dt.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'2-digit'});
   };
 
-  // Days since last tagging update
   const lastTag=logs.length?new Date(logs[logs.length-1].ts):null;
   const daysSinceTag=lastTag?Math.floor((now-lastTag)/86400000):null;
 
-  return { tagVelocity, mapVelocity, tagDaysLeft, mapDaysLeft,
-    tagETA: tagDaysLeft!==null?addDays(tagDaysLeft):null,
-    mapETA: mapDaysLeft!==null?addDays(mapDaysLeft):null,
-    daysSinceTag, lastTag, phy, far, mapped, tagRemaining, mapRemaining,
-    hasChallenge: logs.some(l=>l.challenge&&l.challenge!=='none'&&now-new Date(l.ts)<3*week)
+  return {tagVelocity,mapVelocity,tagDaysLeft,mapDaysLeft,
+    tagETA:tagDaysLeft!==null?addDays(tagDaysLeft):null,
+    mapETA:mapDaysLeft!==null?addDays(mapDaysLeft):null,
+    daysSinceTag,lastTag,phy,far,mapped,tagRemaining,mapRemaining,
+    hasChallenge:logs.some(l=>l.challenge&&l.challenge!=='none'&&now-new Date(l.ts)<3*week)
   };
 }
 
 function forecastBadge(p){
-  if(n(p.phy)===0) return `<span class="forecast-badge fb-grey">⏳ Not Started</span>`;
+  const phy=n(p.phy),far=n(p.far),mapped=n(p.mapped);
+
+  // Not started
+  if(phy===0) return `<span class="forecast-badge fb-grey">⏳ Not Started</span>`;
+
+  // Fully complete
+  if(mapped>=phy && phy>=far) return `<span class="forecast-badge fb-green">✓ Complete</span>`;
+
+  // Tagging stalled check
   const f=calcForecast(p);
-  const phy=n(p.phy), far=n(p.far), mapped=n(p.mapped);
-  // Tagging complete
-  if(phy>=far && mapped>=phy) return `<span class="forecast-badge fb-green">✓ Complete</span>`;
-  // Check deadline
-  if(p.deadline && f.mapDaysLeft!==null){
-    const daysToDeadline=Math.floor((new Date(p.deadline)-Date.now())/86400000);
-    if(f.mapDaysLeft>daysToDeadline) return `<span class="forecast-badge fb-red">⚠ Behind ~${f.mapETA}</span>`;
-  }
   if(f.daysSinceTag!==null && f.daysSinceTag>=3 && phy<far)
     return `<span class="forecast-badge fb-red">🔴 Tagging Stalled</span>`;
+
+  // Deadline risk
+  if(p.deadline && f.mapDaysLeft!==null){
+    const daysToDeadline=Math.floor((new Date(p.deadline)-Date.now())/86400000);
+    if(daysToDeadline>0 && f.mapDaysLeft>daysToDeadline)
+      return `<span class="forecast-badge fb-red">⚠ Behind ~${f.mapETA}</span>`;
+  }
+
+  // Mapping nearly done
+  const mapPct=phy?Math.round(mapped/phy*100):0;
+  if(mapPct>=95) return `<span class="forecast-badge fb-green">✓ Near Complete</span>`;
+  if(mapPct>=85) return `<span class="forecast-badge fb-green">On Track</span>`;
+
+  // Show ETA if calculable
   if(f.mapETA) return `<span class="forecast-badge fb-green">~${f.mapETA}</span>`;
   if(f.tagETA) return `<span class="forecast-badge fb-amber">Tag ~${f.tagETA}</span>`;
-  return `<span class="forecast-badge fb-grey">Insufficient data</span>`;
+
+  // Last resort — show % done instead of "insufficient"
+  const tagPct=far?Math.round(phy/far*100):0;
+  if(tagPct>0) return `<span class="forecast-badge fb-amber">${tagPct}% Tagged · ${mapPct}% Mapped</span>`;
+
+  return `<span class="forecast-badge fb-grey">Awaiting logs</span>`;
 }
 
 // ══════════════════════════════════════════
